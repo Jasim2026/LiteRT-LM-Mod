@@ -17,6 +17,7 @@ import ctypes
 
 from . import interfaces
 from ._ffi import _get_lib
+from ._ffi import ActivationDataType
 from ._ffi import InputDataType
 from ._ffi import LiteRtLmInputData
 
@@ -39,6 +40,11 @@ class Benchmark(interfaces.AbstractBenchmark):
       raise RuntimeError(
           "Failed to create engine settings for benchmark"
           f" (model_path={model_path}, backend={backend_str})"
+      )
+
+    if self.activation_data_type is not None:
+      lib.litert_lm_engine_settings_set_activation_data_type(
+          settings, self.activation_data_type.value
       )
 
     lib.litert_lm_engine_settings_enable_benchmark(settings)

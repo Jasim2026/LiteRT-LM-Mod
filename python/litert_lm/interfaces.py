@@ -25,6 +25,7 @@ import os
 import sys
 from typing import Any
 
+from ._ffi import ActivationDataType
 from ._messages import Contents
 from ._messages import Message
 
@@ -262,6 +263,7 @@ class AbstractEngine(abc.ABC):
   audio_backend: Backend | None = None
   enable_speculative_decoding: bool | None = None
   lora_rank_config: LoraRankConfig | None = None
+  activation_data_type: ActivationDataType | None = None
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -545,6 +547,7 @@ class AbstractBenchmark(abc.ABC):
   cache_dir: str = ""
   enable_speculative_decoding: bool | None = None
   prompt: str = "How are you"
+  activation_data_type: ActivationDataType | None = None
 
   @abc.abstractmethod
   def run(self) -> BenchmarkInfo:
