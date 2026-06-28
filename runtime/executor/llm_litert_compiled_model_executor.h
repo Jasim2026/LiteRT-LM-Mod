@@ -178,6 +178,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
           input_kv_cache_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           output_kv_cache_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          input_conv_state_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          output_conv_state_buffers,
       std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
           decode_input_kv_cache_buffers,
       std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
@@ -198,6 +202,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         kv_cache_buffers_2_(std::move(output_kv_cache_buffers)),
         input_kv_cache_buffers_(&kv_cache_buffers_1_),
         output_kv_cache_buffers_(&kv_cache_buffers_2_),
+        conv_state_buffers_1_(std::move(input_conv_state_buffers)),
+        conv_state_buffers_2_(std::move(output_conv_state_buffers)),
+        input_conv_state_buffers_(&conv_state_buffers_1_),
+        output_conv_state_buffers_(&conv_state_buffers_2_),
         decode_kv_cache_buffers_1_(std::move(decode_input_kv_cache_buffers)),
         decode_kv_cache_buffers_2_(std::move(decode_output_kv_cache_buffers)),
         signatures_(signatures),
@@ -331,6 +339,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::flat_hash_map<absl::string_view, TensorBuffer>* input_kv_cache_buffers_;
   absl::flat_hash_map<absl::string_view, TensorBuffer>*
       output_kv_cache_buffers_;
+      
+  absl::flat_hash_map<absl::string_view, TensorBuffer> conv_state_buffers_1_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> conv_state_buffers_2_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer>* input_conv_state_buffers_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer>* output_conv_state_buffers_;
+
+  // KV cache (double) buffers used during decode when output_batch_size_ > 1.
   // KV cache (double) buffers used during decode when output_batch_size_ > 1.
   std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
       decode_kv_cache_buffers_1_;
@@ -408,6 +423,10 @@ class LlmLiteRtCompiledModelExecutorStatic
           input_kv_cache_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           output_kv_cache_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          input_conv_state_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          output_conv_state_buffers,
       std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
           decode_input_kv_cache_buffers,
       std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
@@ -426,6 +445,8 @@ class LlmLiteRtCompiledModelExecutorStatic
             std::move(decode_input_buffers), std::move(decode_output_buffers),
             std::move(input_kv_cache_buffers),
             std::move(output_kv_cache_buffers),
+            std::move(input_conv_state_buffers),
+            std::move(output_conv_state_buffers),
             std::move(decode_input_kv_cache_buffers),
             std::move(decode_output_kv_cache_buffers), signatures,
             output_batch_size, std::move(weight_cache_path),
@@ -483,6 +504,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
             std::move(decode_input_buffers), std::move(decode_output_buffers),
             /*input_kv_cache_buffers=*/{},
             /*output_kv_cache_buffers=*/{},
+            /*input_conv_state_buffers=*/{},
+            /*output_conv_state_buffers=*/{},
             /*decode_input_kv_cache_buffers=*/std::nullopt,
             /*decode_output_kv_cache_buffers=*/std::nullopt, signatures,
             output_batch_size, std::move(weight_cache_path),
@@ -494,7 +517,7 @@ class LlmLiteRtCompiledModelExecutorDynamic
         kv_increament_size_(kv_increament_size),
         key_cache_input_names_(std::move(key_cache_input_names)),
         value_cache_input_names_(std::move(value_cache_input_names)) {}
-
+////////////////////////////////////////////////////////
   absl::Status PrefillInternal(absl::Span<int> ids,
                                const ExecutorPrefillParams& params);
 

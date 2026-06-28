@@ -87,4 +87,14 @@ message LlmMetadata {
 
   // The channels defined for this model.
   repeated Channel channels = 8;
+
+  // Default Jinja prompt template for the LLM model.
+  optional string jinja_prompt_template = 7;
+
+  // The channels defined for this model.
+  repeated Channel channels = 8;
+
+  // NEW: Defines root string names for identifying LIV convolution states 
+  // in LFM2.5 hybrid architectures. (e.g. "conv_state")
+  repeated string conv_state_root_names = 9;
 }

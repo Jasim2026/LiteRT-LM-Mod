@@ -73,6 +73,11 @@ namespace {
 
 using ::absl::Span;
 
+bool IsConvStateTensor(absl::string_view name) {
+  return absl::StrContains(name, "conv_state") || 
+         absl::StrContains(name, "liv_state");
+}
+
 // Names of the signature runners, used to get the signature runners from the
 // interpreter.
 constexpr absl::string_view kPrefillSignatureRunner = "prefill";
@@ -738,8 +743,17 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     input_buffers[input_name] = std::move(input_buffer_dup);
   }
+  for (const auto& [input_name, input_buffer] : *input_conv_state_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
+    input_buffers[input_name] = std::move(input_buffer_dup);
+  }
   absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers;
   for (const auto& [output_name, output_buffer] : *output_kv_cache_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
+    output_buffer_dup.ClearEvent();
+    output_buffers[output_name] = std::move(output_buffer_dup);
+  }
+  for (const auto& [output_name, output_buffer] : *output_conv_state_buffers_) {
     LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
     output_buffer_dup.ClearEvent();
     output_buffers[output_name] = std::move(output_buffer_dup);
@@ -755,6 +769,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
 
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
+    std::swap(input_conv_state_buffers_, output_conv_state_buffers_);
   }
   return absl::OkStatus();
 }
@@ -940,6 +955,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     decode_input_buffers[input_name] = std::move(input_buffer_dup);
   }
+  for (const auto& [input_name, input_buffer] : *input_conv_state_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
+    decode_input_buffers[input_name] = std::move(input_buffer_dup);
+  }
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
   for (const auto& [output_name, output_buffer] : decode_output_buffers_) {
     // LITERT_ASSIGN_OR_RETURN() causes a compilation error on windows.
@@ -956,6 +975,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     output_buffer_dup.ClearEvent();
     decode_output_buffers[output_name] = std::move(output_buffer_dup);
   }
+  for (const auto& [output_name, output_buffer] : *output_conv_state_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
+    output_buffer_dup.ClearEvent();
+    decode_output_buffers[output_name] = std::move(output_buffer_dup);
+  }
 
   bool async = true;
   LITERT_RETURN_IF_ERROR(
@@ -964,6 +988,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
 
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
+    std::swap(input_conv_state_buffers_, output_conv_state_buffers_);
   }
   return absl::OkStatus();
 }
@@ -1511,6 +1536,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   llm_context_->runtime_state().current_step = 0;
+
+  // --- NEW: Clear Convolution States on Session Reset ---
+  // Convolution states must be strictly zeroed out on new sessions 
+  // because they act as temporal rolling buffers.
+  for (auto& [name, buffer] : conv_state_buffers_1_) {
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  }
+  for (auto& [name, buffer] : conv_state_buffers_2_) {
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  }
+  // ------------------------------------------------------
+
   return absl::OkStatus();
 }
 
@@ -1684,6 +1721,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> output_kv_cache_buffers;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> input_conv_state_buffers;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> output_conv_state_buffers;
 
   bool clear_kv_cache_before_prefill =
       !executor_settings.GetAdvancedSettings() ||
@@ -1691,6 +1730,17 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   for (auto input_name : prefill_signature.InputNames()) {
     // Skip creating buffers for the input tokens, positions and attn mask. Move
     // into prefill function to create them based on the ids size.
+    if (IsConvStateTensor(input_name) && !gpu_optimized_single_buffer_cache) {
+      LITERT_ASSIGN_OR_RETURN(auto input_buffer, compiled_model->CreateInputBuffer(prefill_signature_key, input_name));
+      if (clear_kv_cache_before_prefill) { LITERT_RETURN_IF_ERROR(input_buffer.Clear()); }
+      if (backend == Backend::CPU) {
+        LITERT_ASSIGN_OR_RETURN(auto output_buffer, input_buffer.Duplicate());
+        output_conv_state_buffers[input_name] = std::move(output_buffer);
+      }
+      input_conv_state_buffers[input_name] = std::move(input_buffer);
+      continue;
+    }
+
     if (!IsKVCacheTensor(input_name) || gpu_optimized_single_buffer_cache) {
       continue;
     }
@@ -1707,6 +1757,15 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     input_kv_cache_buffers[input_name] = std::move(input_buffer);
   }
   for (auto output_name : prefill_signature.OutputNames()) {
+    if (IsConvStateTensor(output_name)) {
+      if (backend == Backend::GPU) {
+        LITERT_ASSIGN_OR_RETURN(auto output_buffer, compiled_model->CreateOutputBuffer(prefill_signature_key, output_name));
+        if (clear_kv_cache_before_prefill && gpu_optimized_single_buffer_cache) { LITERT_RETURN_IF_ERROR(output_buffer.Clear()); }
+        output_conv_state_buffers[output_name] = std::move(output_buffer);
+      }
+      continue;
+    }
+
     if (IsKVCacheTensor(output_name)) {
       if (backend == Backend::GPU) {
         LITERT_ASSIGN_OR_RETURN(auto output_buffer,
@@ -1737,7 +1796,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       // We let LoraManager handle LoRA inputs.
       continue;
     }
-    if (IsKVCacheTensor(input_name)) {
+    if (IsKVCacheTensor(input_name) || IsConvStateTensor(input_name)) {
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(
@@ -1748,7 +1807,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   auto output_names = decode_signature.OutputNames();
   for (int i = 0; i < output_names.size(); ++i) {
     auto output_name = output_names[i];
-    if (IsKVCacheTensor(output_name)) {
+    if (IsKVCacheTensor(output_name) || IsConvStateTensor(output_name)) {
       continue;
     }
     // If we are using the GPU sampler and the model is compiled with FP16
@@ -1853,7 +1912,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       std::move(executor_settings), lrt_env, litert_model,
       std::move(compiled_model), std::move(decode_input_buffers),
       std::move(decode_output_buffers), std::move(input_kv_cache_buffers),
-      std::move(output_kv_cache_buffers),
+      std::move(output_kv_cache_buffers), 
+      std::move(input_conv_state_buffers), std::move(output_conv_state_buffers),
       std::move(decode_input_kv_cache_buffers),
       std::move(decode_output_kv_cache_buffers), std::move(prefill_runner_set),
       signatures, batch_size, std::move(cache_path),

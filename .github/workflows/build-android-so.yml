@@ -1,0 +1,48 @@
+name: Build Custom LiteRT-LM (Android ARM64)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows you to trigger the build manually from the GitHub app/website
+
+jobs:
+  build-android-so:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK & NDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+
+      - name: Setup Bazelisk (Bazel wrapper)
+        run: |
+          npm install -g @bazel/bazelisk
+
+      - name: Build Android AAR (ARM64)
+        # We build the AAR because it automatically handles packaging the JNI .so files correctly
+        run: |
+          bazel build -c opt --config=android_arm64 //kotlin/java/com/google/ai/edge/litertlm:litertlm_aar
+
+      - name: Extract .so files from AAR
+        run: |
+          mkdir -p extracted_so
+          # The AAR is essentially a ZIP file. We unzip it to extract the libs.
+          unzip bazel-bin/kotlin/java/com/google/ai/edge/litertlm/litertlm_aar.aar -d aar_out
+          # Copy the compiled .so files to our artifact directory
+          cp aar_out/jni/arm64-v8a/*.so extracted_so/
+
+      - name: Upload .so Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: litertlm-arm64-v8a-so-files
+          path: extracted_so/*.so
