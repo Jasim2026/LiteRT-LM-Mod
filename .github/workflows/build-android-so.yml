@@ -27,16 +27,22 @@ jobs:
       - name: Setup Bazelisk
         uses: bazelbuild/setup-bazelisk@v3
 
-      # FIXED: Using the official 'litertlm-android' target
       - name: Build Android Target
         run: |
           bazel build -c opt --config=android_arm64 //kotlin/java/com/google/ai/edge/litertlm:litertlm-android
 
-      # FIXED: Dynamically harvest all compiled .so files from the bazel-bin output tree
+      # FIXED: Added -L flag to follow symlinks, and also fallback search to global Bazel cache
       - name: Extract .so files
         run: |
           mkdir -p extracted_so
-          find bazel-bin/ -name "*.so" -exec cp {} extracted_so/ \;
+          
+          # Search following symlinks
+          find -L bazel-bin/ -name "*.so" -exec cp {} extracted_so/ \;
+          
+          # Search global Bazel cache directly to ensure we get everything
+          find /home/runner/.cache/bazel/ -name "*.so" -exec cp {} extracted_so/ \;
+          
+          # List the harvested files
           ls -lh extracted_so/
 
       - name: Upload .so Artifacts
