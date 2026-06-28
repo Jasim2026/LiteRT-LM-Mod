@@ -27,20 +27,18 @@ jobs:
       - name: Setup Bazelisk
         uses: bazelbuild/setup-bazelisk@v3
 
+      # FIXED: Added the '...' wildcard to compile both Kotlin AND native JNI layers
       - name: Build Android Target
         run: |
-          bazel build -c opt --config=android_arm64 //kotlin/java/com/google/ai/edge/litertlm:litertlm-android
+          bazel build -c opt --config=android_arm64 //kotlin/java/com/google/ai/edge/litertlm/...
 
-      # FIXED: Added -L flag to follow symlinks, and also fallback search to global Bazel cache
+      # FIXED: Search ONLY bazel-bin (with symlinks followed) to eliminate toolchain cache bloat
       - name: Extract .so files
         run: |
           mkdir -p extracted_so
           
-          # Search following symlinks
+          # Search following symlinks ONLY in target output directory
           find -L bazel-bin/ -name "*.so" -exec cp {} extracted_so/ \;
-          
-          # Search global Bazel cache directly to ensure we get everything
-          find /home/runner/.cache/bazel/ -name "*.so" -exec cp {} extracted_so/ \;
           
           # List the harvested files
           ls -lh extracted_so/
